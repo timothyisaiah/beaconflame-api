@@ -13,9 +13,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN chmod +x /app/docker/entrypoint.sh
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/cmd-web.sh
 
-ENV DJANGO_SETTINGS_MODULE=config.settings.docker
+RUN DJANGO_SETTINGS_MODULE=config.settings.production \
+    SECRET_KEY=collectstatic-build-only-not-for-runtime \
+    API_KEY_PEPPER=collectstatic-build-pepper-at-least-32-chars!! \
+    ALLOWED_HOSTS=localhost,127.0.0.1 \
+    python manage.py collectstatic --noinput
+
+ENV DJANGO_SETTINGS_MODULE=config.settings.production
 EXPOSE 8000
 
 ENTRYPOINT ["./docker/entrypoint.sh"]
+CMD ["./docker/cmd-web.sh"]

@@ -1,0 +1,226 @@
+# Deploy API + Celery worker to Cloud Run; run DB migrations via Cloud Run Job.
+#
+# Prerequisites (GCP — see scripts/gcp/bootstrap.sh for API enablement):
+#   - Artifact Registry repo, Cloud SQL Postgres, Memorystore Redis, VPC connector
+#   - Runtime SA: roles/cloudsql.client, roles/secretmanager.secretAccessor
+#   - Deploy SA + Workload Identity Federation for GitHub (no JSON keys)
+#   - Secret Manager secrets (names must match this file or edit references):
+#       beaconflame-django-secret-key, beaconflame-database-url, beaconflame-api-key-pepper,
+#       beaconflame-celery-broker-url, beaconflame-celery-result-backend
+#
+# GitHub repository variables (Settings → Secrets and variables → Actions → Variables):
+#   GCP_PROJECT_ID, GCP_REGION, AR_REPOSITORY, CLOUDSQL_INSTANCE, VPC_CONNECTOR,
+#   RUNTIME_SERVICE_ACCOUNT (email), ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, CSRF_TRUSTED_ORIGINS
+# Optional: CLOUD_RUN_SERVICE_API, CLOUD_RUN_SERVICE_WORKER, CLOUD_RUN_JOB_MIGRATE,
+#           GOOGLE_OAUTH_CLIENT_ID (comma-separated client IDs)
+#
+# GitHub repository secrets:
+#   GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT (deployer SA email)
+
+name: Deploy GCP
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gcp-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  AR_REPOSITORY: ${{ vars.AR_REPOSITORY }}
+  IMAGE_NAME: beaconflame-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Pytest
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+        run: pytest
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?Set repo variable GCP_PROJECT_ID}"
+          : "${GCP_REGION:?Set repo variable GCP_REGION}"
+          : "${AR_REPOSITORY:?Set repo variable AR_REPOSITORY}"
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Deploy Cloud Run (API)
+        env:
+          CLOUDSQL_INSTANCE: ${{ vars.CLOUDSQL_INSTANCE }}
+          VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+          RUNTIME_SERVICE_ACCOUNT: ${{ vars.RUNTIME_SERVICE_ACCOUNT }}
+          ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
+          CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          CSRF_TRUSTED_ORIGINS: ${{ vars.CSRF_TRUSTED_ORIGINS }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+          CLOUD_RUN_SERVICE_API: ${{ vars.CLOUD_RUN_SERVICE_API }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE (project:region:instance)}"
+          : "${VPC_CONNECTOR:?Set repo variable VPC_CONNECTOR}"
+          : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
+          : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
+          NAME="${CLOUD_RUN_SERVICE_API:-beaconflame-api}"
+          if [ -z "${NAME}" ]; then NAME=beaconflame-api; fi
+          SEC_COMMON="SECRET_KEY=beaconflame-django-secret-key:latest,DATABASE_URL=beaconflame-database-url:latest,API_KEY_PEPPER=beaconflame-api-key-pepper:latest,CELERY_BROKER_URL=beaconflame-celery-broker-url:latest,CELERY_RESULT_BACKEND=beaconflame-celery-result-backend:latest"
+          python3 <<'PY'
+          import json
+          import os
+
+          out = {
+              "DJANGO_SETTINGS_MODULE": "config.settings.production",
+              "RUN_MIGRATE_ON_START": "0",
+              "ALLOWED_HOSTS": os.environ["ALLOWED_HOSTS"],
+          }
+          for k in ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS", "GOOGLE_OAUTH_CLIENT_ID"):
+              v = os.environ.get(k)
+              if v:
+                  out[k] = v
+          open("/tmp/run-env.json", "w", encoding="utf-8").write(json.dumps(out))
+          PY
+          gcloud run deploy "${NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${IMAGE}" \
+            --platform=managed \
+            --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
+            --add-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
+            --vpc-connector="${VPC_CONNECTOR}" \
+            --vpc-egress=all-traffic \
+            --ingress=all \
+            --allow-unauthenticated \
+            --env-vars-file=/tmp/run-env.json \
+            --set-secrets="${SEC_COMMON}"
+
+      - name: Deploy Cloud Run (Celery worker)
+        env:
+          CLOUDSQL_INSTANCE: ${{ vars.CLOUDSQL_INSTANCE }}
+          VPC_CONNECTOR: ${{ vars.VPC_CONNECTOR }}
+          RUNTIME_SERVICE_ACCOUNT: ${{ vars.RUNTIME_SERVICE_ACCOUNT }}
+          ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
+          CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          CSRF_TRUSTED_ORIGINS: ${{ vars.CSRF_TRUSTED_ORIGINS }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+          CLOUD_RUN_SERVICE_WORKER: ${{ vars.CLOUD_RUN_SERVICE_WORKER }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE}"
+          : "${VPC_CONNECTOR:?Set repo variable VPC_CONNECTOR}"
+          : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
+          : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
+          NAME="${CLOUD_RUN_SERVICE_WORKER:-beaconflame-worker}"
+          if [ -z "${NAME}" ]; then NAME=beaconflame-worker; fi
+          SEC_COMMON="SECRET_KEY=beaconflame-django-secret-key:latest,DATABASE_URL=beaconflame-database-url:latest,API_KEY_PEPPER=beaconflame-api-key-pepper:latest,CELERY_BROKER_URL=beaconflame-celery-broker-url:latest,CELERY_RESULT_BACKEND=beaconflame-celery-result-backend:latest"
+          python3 <<'PY'
+          import json
+          import os
+
+          out = {
+              "DJANGO_SETTINGS_MODULE": "config.settings.production",
+              "RUN_MIGRATE_ON_START": "0",
+              "ALLOWED_HOSTS": os.environ["ALLOWED_HOSTS"],
+          }
+          for k in ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS", "GOOGLE_OAUTH_CLIENT_ID"):
+              v = os.environ.get(k)
+              if v:
+                  out[k] = v
+          open("/tmp/run-env.json", "w", encoding="utf-8").write(json.dumps(out))
+          PY
+          gcloud run deploy "${NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${IMAGE}" \
+            --platform=managed \
+            --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
+            --add-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
+            --vpc-connector="${VPC_CONNECTOR}" \
+            --vpc-egress=all-traffic \
+            --ingress=all \
+            --no-allow-unauthenticated \
+            --min-instances=1 \
+            --no-cpu-throttling \
+            --command=python \
+            --args=docker/celery_cloudrun.py \
+            --env-vars-file=/tmp/run-env.json \
+            --set-secrets="${SEC_COMMON}"
+
+      - name: Deploy and run migrate job
+        env:
+          CLOUDSQL_INSTANCE: ${{ vars.CLOUDSQL_INSTANCE }}
+          RUNTIME_SERVICE_ACCOUNT: ${{ vars.RUNTIME_SERVICE_ACCOUNT }}
+          ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
+          CLOUD_RUN_JOB_MIGRATE: ${{ vars.CLOUD_RUN_JOB_MIGRATE }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE}"
+          : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
+          : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
+          JOB="${CLOUD_RUN_JOB_MIGRATE:-beaconflame-migrate}"
+          if [ -z "${JOB}" ]; then JOB=beaconflame-migrate; fi
+          SEC_COMMON="SECRET_KEY=beaconflame-django-secret-key:latest,DATABASE_URL=beaconflame-database-url:latest,API_KEY_PEPPER=beaconflame-api-key-pepper:latest,CELERY_BROKER_URL=beaconflame-celery-broker-url:latest,CELERY_RESULT_BACKEND=beaconflame-celery-result-backend:latest"
+          python3 <<'PY'
+          import json
+          import os
+
+          out = {
+              "DJANGO_SETTINGS_MODULE": "config.settings.production",
+              "RUN_MIGRATE_ON_START": "0",
+              "ALLOWED_HOSTS": os.environ["ALLOWED_HOSTS"],
+          }
+          open("/tmp/migrate-env.json", "w", encoding="utf-8").write(json.dumps(out))
+          PY
+          gcloud run jobs deploy "${JOB}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${IMAGE}" \
+            --tasks=1 \
+            --max-retries=0 \
+            --parallelism=1 \
+            --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
+            --set-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
+            --env-vars-file=/tmp/migrate-env.json \
+            --set-secrets="${SEC_COMMON}" \
+            --command=python \
+            --args=manage.py,migrate,--noinput
+          gcloud run jobs execute "${JOB}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --wait

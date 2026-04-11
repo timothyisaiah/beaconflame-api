@@ -6,6 +6,7 @@ db.sqlite3
 .env*
 *.env
 .venv/
+.venv-ci/
 venv/
 .pytest_cache/
 .mypy_cache/
