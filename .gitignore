@@ -2,7 +2,9 @@ __pycache__/
 *.py[cod]
 *.sqlite3
 db.sqlite3
-.env
+# Environment / secrets (all dotenv-style and *.env files)
+.env*
+*.env
 .venv/
 venv/
 .pytest_cache/

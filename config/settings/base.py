@@ -13,6 +13,14 @@ SECRET_KEY = env("SECRET_KEY", default="dev-only-change-in-production")
 DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
+# Django defaults to COOP "same-origin", which blocks Google Identity Services (and similar)
+# popups/iframes) from postMessaging back to your page. Use same-origin-allow-popups unless
+# you intentionally need strict isolation (then use OAuth flows that avoid popups).
+SECURE_CROSS_ORIGIN_OPENER_POLICY = env(
+    "SECURE_CROSS_ORIGIN_OPENER_POLICY",
+    default="same-origin-allow-popups",
+)
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -92,6 +100,7 @@ AUTH_USER_MODEL = "authentication.User"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.authentication.authentication.BearerOrApiKeyAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -113,6 +122,9 @@ SIMPLE_JWT = {
 }
 
 API_KEY_PEPPER = env("API_KEY_PEPPER", default="dev-pepper-change-in-production-min-32-chars!!")
+
+# Comma-separated OAuth 2.0 client IDs from Google Cloud Console (Web client, etc.).
+GOOGLE_OAUTH_CLIENT_ID = env.list("GOOGLE_OAUTH_CLIENT_ID", default=[])
 
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/1")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/2")

@@ -1,10 +1,13 @@
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView
 
 from apps.api.v1.serializers import (
@@ -36,6 +39,7 @@ from apps.authentication.permissions import (
     CanViewDecision,
     IsAdminOrAnalyst,
 )
+from apps.authentication.google_auth import user_for_google_oauth_email, verify_google_id_token
 from apps.authentication.serializers import AuditedTokenObtainPairSerializer
 from apps.decisions.models import Decision
 from apps.decisions.services import DecisionService
@@ -46,6 +50,125 @@ class LoginView(TokenObtainPairView):
     serializer_class = AuditedTokenObtainPairSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth_login"
+
+
+class GoogleLoginView(APIView):
+    """
+    Exchange a Google Sign-In ID token (credential) for API JWTs.
+
+    Request JSON: {"id_token": "<token from Google Identity Services>"}.
+    Configure GOOGLE_OAUTH_CLIENT_ID with your OAuth 2.0 Web client ID(s).
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
+
+    def post(self, request, *args, **kwargs):
+        cid = getattr(request, "correlation_id", None)
+        audiences = list(settings.GOOGLE_OAUTH_CLIENT_ID)
+        if not audiences:
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=None,
+                target_type="auth",
+                target_id="google",
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "not_configured"},
+                request_path=request.path,
+            )
+            return Response(
+                {"detail": "Google sign-in is not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        raw = (request.data or {}).get("id_token") or (request.data or {}).get("credential")
+        if not raw or not isinstance(raw, str):
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=None,
+                target_type="auth",
+                target_id="google",
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "missing_token"},
+                request_path=request.path,
+            )
+            raise ValidationError({"id_token": "This field is required."})
+
+        try:
+            claims = verify_google_id_token(raw, audiences)
+        except ValueError:
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=None,
+                target_type="auth",
+                target_id="google",
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "invalid_token"},
+                request_path=request.path,
+            )
+            raise AuthenticationFailed("Invalid Google token.") from None
+
+        if not claims.get("email_verified"):
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=None,
+                target_type="auth",
+                target_id=str(claims.get("email") or "unknown"),
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "email_not_verified"},
+                request_path=request.path,
+            )
+            raise AuthenticationFailed("Google account email is not verified.")
+
+        email = claims.get("email")
+        if not email:
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=None,
+                target_type="auth",
+                target_id="google",
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "missing_email"},
+                request_path=request.path,
+            )
+            raise AuthenticationFailed("Google token did not include an email.")
+
+        user = user_for_google_oauth_email(email)
+        if not user.is_active:
+            AuditService.record(
+                actor_type=ActorType.USER,
+                actor_id=str(user.id),
+                target_type="auth",
+                target_id=str(user.id),
+                event_type=EventType.AUTH_LOGIN_FAILURE,
+                correlation_id=cid,
+                metadata={"reason": "inactive_user"},
+                request_path=request.path,
+            )
+            raise AuthenticationFailed("User account is disabled.")
+
+        refresh = RefreshToken.for_user(user)
+        AuditService.record(
+            actor_type=ActorType.USER,
+            actor_id=str(user.id),
+            target_type="auth",
+            target_id=str(user.id),
+            event_type=EventType.AUTH_LOGIN_SUCCESS,
+            correlation_id=cid,
+            metadata={"email": user.email, "method": "google"},
+            request_path=request.path,
+        )
+        return Response(
+            {"refresh": str(refresh), "access": str(refresh.access_token)},
+            status=status.HTTP_200_OK,
+        )
 
 
 class LogoutView(TokenBlacklistView):

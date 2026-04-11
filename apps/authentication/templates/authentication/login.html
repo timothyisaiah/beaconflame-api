@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Beaconflame</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #12141a;
+      --panel: #1b1e27;
+      --border: #2a2f3d;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --accent: #c17f59;
+      --accent-dim: #9a6548;
+      --error: #e07070;
+      --glow: rgba(193, 127, 89, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      font-family: "Instrument Sans", system-ui, sans-serif;
+      background: radial-gradient(ellipse 120% 80% at 50% -20%, var(--glow), transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 2rem 2rem 1.75rem;
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      margin: 0 0 1.75rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: inherit;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--glow);
+    }
+    button[type="submit"] {
+      width: 100%;
+      margin-top: 0.25rem;
+      padding: 0.7rem 1rem;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(165deg, var(--accent), var(--accent-dim));
+      color: #0c0d10;
+      font-weight: 600;
+      font-size: 0.95rem;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    button[type="submit"]:hover {
+      filter: brightness(1.06);
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin: 1.5rem 0 1.25rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .divider::before,
+    .divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .google-wrap {
+      display: flex;
+      justify-content: center;
+      min-height: 44px;
+    }
+    .google-disabled {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 0.5rem;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+    }
+    .error {
+      margin: 0 0 1rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: rgba(224, 112, 112, 0.1);
+      border: 1px solid rgba(224, 112, 112, 0.25);
+      color: var(--error);
+      font-size: 0.88rem;
+    }
+    .foot {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="login-root" data-next="{{ next_url|default:'/' }}">
+    <h1>Sign in</h1>
+    <p class="sub">Use your email and password, or Google. After signing in you can open API URLs in this browser using your session.</p>
+
+    {% if login_error == "invalid" %}
+      <p class="error" role="alert">Invalid email or password.</p>
+    {% elif login_error == "disabled" %}
+      <p class="error" role="alert">This account is disabled.</p>
+    {% endif %}
+
+    <form method="post" action="{% url 'browser-login' %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next_url|default:'/' }}">
+
+      <label for="id_email">Email</label>
+      <input id="id_email" type="email" name="email" autocomplete="username" required>
+
+      <label for="id_password">Password</label>
+      <input id="id_password" type="password" name="password" autocomplete="current-password" required>
+
+      <button type="submit">Continue with password</button>
+    </form>
+
+    <div class="divider">or</div>
+
+    <div class="google-wrap">
+      {% if google_configured and google_client_id %}
+        <div id="google_btn"></div>
+      {% else %}
+        <p class="google-disabled">Google sign-in is not configured for this server (<code>GOOGLE_OAUTH_CLIENT_ID</code>).</p>
+      {% endif %}
+    </div>
+
+    <p class="foot">For scripts and integrations, use <code>POST /api/v1/auth/login</code> with JSON and a Bearer token. With a browser session, unsafe API methods (e.g. POST) require a CSRF token unless you use Bearer instead.</p>
+  </div>
+
+  {% if google_configured and google_client_id %}
+  <script>
+    (function () {
+      const root = document.getElementById("login-root");
+      const next = root ? root.dataset.next || "/" : "/";
+
+      function readCsrf() {
+        const el = document.querySelector("[name=csrfmiddlewaretoken]");
+        return el ? el.value : "";
+      }
+
+      window.handleGoogleCredential = async function (response) {
+        if (!response || !response.credential) return;
+        try {
+          const r = await fetch("{% url 'browser-login-google' %}", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRFToken": readCsrf(),
+            },
+            body: JSON.stringify({ credential: response.credential, next: next }),
+          });
+          const data = await r.json().catch(function () { return {}; });
+          if (r.ok && data.ok && data.redirect) {
+            window.location.href = data.redirect;
+          } else {
+            alert(data.error || "Google sign-in failed.");
+          }
+        } catch (e) {
+          alert("Network error during Google sign-in.");
+        }
+      };
+
+      /* Inline <script defer> does not wait for external scripts; must boot from GSI onload. */
+      window.__bfInitGoogleSignIn = function () {
+        const holder = document.getElementById("google_btn");
+        if (!holder || !window.google || !google.accounts || !google.accounts.id) {
+          if (holder) {
+            holder.innerHTML = "<p class=\"google-disabled\" style=\"margin:0\">Google script did not load. Check the network tab and any blockers.</p>";
+          }
+          return;
+        }
+        try {
+          google.accounts.id.initialize({
+            client_id: "{{ google_client_id|escapejs }}",
+            callback: window.handleGoogleCredential,
+            auto_select: false,
+            use_fedcm_for_prompt: false,
+          });
+          google.accounts.id.renderButton(holder, {
+            type: "standard",
+            theme: "filled_black",
+            size: "large",
+            text: "continue_with",
+            shape: "rectangular",
+            width: 320,
+          });
+        } catch (e) {
+          holder.innerHTML = "<p class=\"google-disabled\" style=\"margin:0\">Google Sign-In could not start. Try a refresh or another browser.</p>";
+          console.error(e);
+        }
+      };
+    })();
+  </script>
+  <script src="https://accounts.google.com/gsi/client" async defer onload="window.__bfInitGoogleSignIn()"></script>
+  {% endif %}
+</body>
+</html>

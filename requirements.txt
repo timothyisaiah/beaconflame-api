@@ -7,3 +7,5 @@ celery>=5.3
 django-environ>=0.11
 python-json-logger>=2.0
 django-cors-headers>=4.3
+google-auth>=2.29
+requests>=2.31

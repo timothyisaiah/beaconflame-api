@@ -1,4 +1,7 @@
+from unittest.mock import patch
+
 import pytest
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.audits.constants import EventType
@@ -9,6 +12,47 @@ from apps.authentication.models import User, UserRole
 @pytest.mark.django_db
 def test_login_success(jwt_for, admin_user):
     assert jwt_for(admin_user)
+
+
+@pytest.mark.django_db
+@override_settings(GOOGLE_OAUTH_CLIENT_ID=["test.apps.googleusercontent.com"])
+@patch("apps.api.v1.views.verify_google_id_token")
+def test_google_login_creates_user_and_tokens(mock_verify, api_client):
+    mock_verify.return_value = {
+        "email": "google-new@example.com",
+        "email_verified": True,
+        "aud": "test.apps.googleusercontent.com",
+    }
+    r = api_client.post("/api/v1/auth/google", {"id_token": "fake"}, format="json")
+    assert r.status_code == 200
+    body = r.json()
+    assert "access" in body and "refresh" in body
+    user = User.objects.get(email="google-new@example.com")
+    assert user.role == UserRole.ANALYST
+    assert AuditLog.objects.filter(
+        event_type=EventType.AUTH_LOGIN_SUCCESS,
+        metadata__method="google",
+    ).exists()
+
+
+@pytest.mark.django_db
+@override_settings(GOOGLE_OAUTH_CLIENT_ID=["test.apps.googleusercontent.com"])
+@patch("apps.api.v1.views.verify_google_id_token")
+def test_google_login_existing_user(mock_verify, api_client, admin_user):
+    mock_verify.return_value = {
+        "email": admin_user.email,
+        "email_verified": True,
+        "aud": "test.apps.googleusercontent.com",
+    }
+    r = api_client.post("/api/v1/auth/google", {"credential": "fake"}, format="json")
+    assert r.status_code == 200
+
+
+@pytest.mark.django_db
+@override_settings(GOOGLE_OAUTH_CLIENT_ID=[])
+def test_google_login_not_configured(api_client):
+    r = api_client.post("/api/v1/auth/google", {"id_token": "x"}, format="json")
+    assert r.status_code == 503
 
 
 @pytest.mark.django_db
