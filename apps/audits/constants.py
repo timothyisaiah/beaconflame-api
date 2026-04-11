@@ -1,0 +1,25 @@
+class ActorType:
+    USER = "user"
+    API_KEY = "api_key"
+    SYSTEM = "system"
+
+
+class EventType:
+    AUTH_LOGIN_SUCCESS = "auth.login_success"
+    AUTH_LOGIN_FAILURE = "auth.login_failure"
+    AUTH_LOGOUT = "auth.logout"
+    APPLICATION_SUBMITTED = "application.submitted"
+    APPLICATION_STATUS_CHANGED = "application.status_changed"
+    ENRICHMENT_COMPLETED = "pipeline.enrichment_completed"
+    FEATURES_COMPUTED = "pipeline.features_computed"
+    SCORE_GENERATED = "pipeline.score_generated"
+    RULES_EVALUATED = "pipeline.rules_evaluated"
+    DECISION_CREATED = "decision.created"
+    DECISION_OVERRIDDEN = "decision.overridden"
+    POLICY_RULE_CREATED = "policy.rule_created"
+    POLICY_RULE_UPDATED = "policy.rule_updated"
+    POLICY_RULE_DELETED = "policy.rule_deleted"
+    API_KEY_CREATED = "api_key.created"
+    API_KEY_REVOKED = "api_key.revoked"
+    WEBHOOK_DISPATCH_ATTEMPT = "webhook.dispatch_attempt"
+    PIPELINE_FAILED = "pipeline.failed"
