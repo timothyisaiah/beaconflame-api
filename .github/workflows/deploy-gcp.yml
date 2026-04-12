@@ -14,9 +14,17 @@
 # Optional: CLOUD_RUN_SERVICE_API, CLOUD_RUN_SERVICE_WORKER, CLOUD_RUN_JOB_MIGRATE,
 #           GOOGLE_OAUTH_CLIENT_ID (comma-separated client IDs)
 #
-# GitHub Actions — WIF (use either Variables or Secrets; both names must be set):
-#   GCP_WORKLOAD_IDENTITY_PROVIDER (full resource name, e.g. projects/…/locations/global/workloadIdentityPools/…/providers/…)
-#   GCP_SERVICE_ACCOUNT (deployer service account email)
+# GitHub Actions — WIF (set BOTH values; secret OR variable per key, secret wins in the resolve step):
+#   GCP_WORKLOAD_IDENTITY_PROVIDER — full resource name (projects/…/locations/global/workloadIdentityPools/…/providers/…)
+#   GCP_SERVICE_ACCOUNT — deployer service account email
+#
+# GitHub Environment: if WIF lives under **Settings → Environments → (name) → Environment secrets**,
+# the deploy job must use that environment (see `environment:` on deploy). Set **repository** variable
+# GCP_ACTIONS_ENVIRONMENT to that environment name (e.g. production). Do not put that name only as an Environment secret.
+#
+# GCP_WORKLOAD_IDENTITY_PROVIDER must be the provider **resource name** from GCP:
+#   projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
+# (NOT principal://… — that is for IAM bindings, not for google-github-actions/auth.)
 
 name: Deploy GCP
 
@@ -58,24 +66,53 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
-    # Resolve WIF once at job level (secrets + vars), then pass via env into the auth action.
-    # Some setups resolve this more reliably than putting secrets||vars directly in action inputs.
-    env:
-      # case(pred, if_true, default) — do not use && for strings; && returns booleans in GitHub expressions.
-      GCP_WIF_PROVIDER: ${{ case(secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '', secrets.GCP_WORKLOAD_IDENTITY_PROVIDER, vars.GCP_WORKLOAD_IDENTITY_PROVIDER) }}
-      GCP_WIF_SA: ${{ case(secrets.GCP_SERVICE_ACCOUNT != '', secrets.GCP_SERVICE_ACCOUNT, vars.GCP_SERVICE_ACCOUNT) }}
+    environment:
+      # Use a GitHub Environment so Environment-scoped secrets/vars are visible. Default name is production
+      # if GCP_ACTIONS_ENVIRONMENT is unset — create that Environment in the repo (it can be empty).
+      name: ${{ case(vars.GCP_ACTIONS_ENVIRONMENT != '', vars.GCP_ACTIONS_ENVIRONMENT, 'production') }}
+      deployment: false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check GCP auth inputs
+      # Secrets/vars in job-level env + case() can arrive empty on the runner; map them in step env then export for later steps.
+      - name: Resolve GCP WIF for auth
+        env:
+          WIF_S: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_V: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SA_S: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          SA_V: ${{ vars.GCP_SERVICE_ACCOUNT }}
         run: |
-          if [ -z "${GCP_WIF_PROVIDER}" ] || [ -z "${GCP_WIF_SA}" ]; then
+          set -euo pipefail
+          WIF="${WIF_S:-${WIF_V:-}}"
+          SA="${SA_S:-${SA_V:-}}"
+          if [ -z "${WIF}" ] || [ -z "${SA}" ]; then
             echo "::error::Missing GCP_WORKLOAD_IDENTITY_PROVIDER or GCP_SERVICE_ACCOUNT."
-            echo "Add both as Repository Actions Variables, or as Actions Secrets (secret wins if non-empty)."
-            echo "If you stored them under a GitHub Environment, add to this job: environment: <name>"
-            echo "WIF length=${#GCP_WIF_PROVIDER} SA length=${#GCP_WIF_SA}"
+            echo "Add them as repository or Environment secrets/variables (exact names). For Environment secrets, set repo variable GCP_ACTIONS_ENVIRONMENT to that environment name (or create GitHub Environment 'production')."
             exit 1
           fi
+          case "${WIF}" in
+            principal://*)
+              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is a principal URL (principal://…). Use the provider resource name from GCP instead: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER"
+              exit 1
+              ;;
+          esac
+          case "${WIF}" in
+            projects/*/locations/global/workloadIdentityPools/*/providers/*) ;;
+            *)
+              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER should start with projects/ and contain /locations/global/workloadIdentityPools/…/providers/…"
+              exit 1
+              ;;
+          esac
+          {
+            echo "GCP_WIF_PROVIDER<<__EOF_WIF__"
+            printf '%s\n' "${WIF}"
+            echo "__EOF_WIF__"
+          } >> "${GITHUB_ENV}"
+          {
+            echo "GCP_WIF_SA<<__EOF_SA__"
+            printf '%s\n' "${SA}"
+            echo "__EOF_SA__"
+          } >> "${GITHUB_ENV}"
 
       - uses: google-github-actions/auth@v2
         with:
