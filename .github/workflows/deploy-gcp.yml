@@ -90,6 +90,24 @@ jobs:
             echo "Add them as repository or Environment secrets/variables (exact names). For Environment secrets, set repo variable GCP_ACTIONS_ENVIRONMENT to that environment name (or create GitHub Environment 'production')."
             exit 1
           fi
+
+          echo "=== GCP WIF debug (GitHub masks substrings that match a secret value) ==="
+          if [ -n "${WIF_S}" ]; then echo "WIF source: secret (non-empty)"; else echo "WIF source: variable (secret empty)"; fi
+          if [ -n "${SA_S}" ]; then echo "SA source: secret (non-empty)"; else echo "SA source: variable (secret empty)"; fi
+          echo "WIF byte length: ${#WIF}"
+          echo "SA byte length: ${#SA}"
+          printf 'WIF first 240 bytes (repr; GitHub may mask): '
+          printf '%s' "${WIF}" | head -c 240 | python3 -c "import sys; print(repr(sys.stdin.read()))"
+          printf 'SA first 160 bytes (repr): '
+          printf '%s' "${SA}" | head -c 160 | python3 -c "import sys; print(repr(sys.stdin.read()))"
+          if [[ "${WIF}" == projects/* ]]; then echo "WIF starts with projects/: yes"; else echo "WIF starts with projects/: no"; fi
+          if [[ "${WIF}" == *"/locations/global/workloadIdentityPools/"* ]]; then echo "WIF has workloadIdentityPools segment: yes"; else echo "WIF has workloadIdentityPools segment: no"; fi
+          if [[ "${WIF}" == *"/providers/"* ]]; then echo "WIF has /providers/ segment: yes"; else echo "WIF has /providers/ segment: no"; fi
+          echo "=== end debug ==="
+
+          WIF="$(printf '%s' "${WIF}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')"
+          SA="$(printf '%s' "${SA}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')"
+
           case "${WIF}" in
             principal://*)
               echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is a principal URL (principal://…). Use the provider resource name from GCP instead: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER"
@@ -99,18 +117,22 @@ jobs:
           case "${WIF}" in
             projects/*/locations/global/workloadIdentityPools/*/providers/*) ;;
             *)
-              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER should start with projects/ and contain /locations/global/workloadIdentityPools/…/providers/…"
+              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER should match: projects/*/locations/global/workloadIdentityPools/*/providers/*"
+              echo "After trim, WIF byte length: ${#WIF}"
+              printf 'After trim, WIF repr[0:280]: '; printf '%s' "${WIF}" | head -c 280 | python3 -c "import sys; print(repr(sys.stdin.read()))"
               exit 1
               ;;
           esac
           {
             echo "GCP_WIF_PROVIDER<<__EOF_WIF__"
-            printf '%s\n' "${WIF}"
+            printf '%s' "${WIF}"
+            echo ""
             echo "__EOF_WIF__"
           } >> "${GITHUB_ENV}"
           {
             echo "GCP_WIF_SA<<__EOF_SA__"
-            printf '%s\n' "${SA}"
+            printf '%s' "${SA}"
+            echo ""
             echo "__EOF_SA__"
           } >> "${GITHUB_ENV}"
 
