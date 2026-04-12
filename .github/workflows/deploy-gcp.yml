@@ -108,21 +108,46 @@ jobs:
           WIF="$(printf '%s' "${WIF}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')"
           SA="$(printf '%s' "${SA}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')"
 
-          case "${WIF}" in
-            principal://*)
-              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is a principal URL (principal://…). Use the provider resource name from GCP instead: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER"
-              exit 1
-              ;;
-          esac
-          case "${WIF}" in
-            projects/*/locations/global/workloadIdentityPools/*/providers/*) ;;
-            *)
-              echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER should match: projects/*/locations/global/workloadIdentityPools/*/providers/*"
-              echo "After trim, WIF byte length: ${#WIF}"
-              printf 'After trim, WIF repr[0:280]: '; printf '%s' "${WIF}" | head -c 280 | python3 -c "import sys; print(repr(sys.stdin.read()))"
-              exit 1
-              ;;
-          esac
+          # Bash `case` globs can reject values that still pass substring checks; validate structurally.
+          if ! printf '%s' "${WIF}" | python3 - <<'PY'
+          import re
+          import sys
+
+          w = sys.stdin.read().strip()
+          if w.startswith("principal://"):
+              print(
+                  "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is principal://… "
+                  "(IAM binding form). Use the provider resource name: "
+                  "projects/…/locations/global/workloadIdentityPools/…/providers/…"
+              )
+              sys.exit(1)
+          parts = [p for p in w.split("/") if p != ""]
+          lens = [len(p) for p in parts]
+          print(f"WIF_segment_count={len(parts)} WIF_segment_lens={lens}")
+          ok = re.fullmatch(
+              r"projects/[^/]+/locations/global/workloadIdentityPools/[^/]+/providers/[^/]+",
+              w,
+          )
+          if ok:
+              sys.exit(0)
+          print("::error::GCP_WORKLOAD_IDENTITY_PROVIDER is not the expected 8-segment resource name.")
+          if len(parts) != 8:
+              print(f"::notice::Expected exactly 8 non-empty path segments when split on '/'; got {len(parts)}.")
+          else:
+              want = ("projects", "locations", "global", "workloadIdentityPools", "providers")
+              idx = [0, 2, 3, 4, 6]
+              for i, label in zip(idx, want):
+                  if i >= len(parts) or parts[i] != label:
+                      print(f"::notice::Segment {i} should be {label!r}; got {parts[i]!r if i < len(parts) else 'MISSING'}.")
+                      break
+          bad = [(i, hex(ord(c))) for i, c in enumerate(w) if ord(c) < 33 or ord(c) > 126]
+          if bad:
+              print(f"::notice::Non-printable or unusual codepoints (index, hex): {bad[:24]}")
+          sys.exit(1)
+          PY
+          then
+            exit 1
+          fi
           {
             echo "GCP_WIF_PROVIDER<<__EOF_WIF__"
             printf '%s' "${WIF}"
