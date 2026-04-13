@@ -211,8 +211,6 @@ jobs:
           CLOUD_RUN_SERVICE_API: ${{ vars.CLOUD_RUN_SERVICE_API }}
         run: |
           set -euo pipefail
-          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE (project:region:instance)}"
-          : "${VPC_CONNECTOR:?Set repo variable VPC_CONNECTOR}"
           : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
           : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
           NAME="${CLOUD_RUN_SERVICE_API:-beaconflame-api}"
@@ -233,15 +231,20 @@ jobs:
                   out[k] = v
           open("/tmp/run-env.json", "w", encoding="utf-8").write(json.dumps(out))
           PY
+          EXTRA_FLAGS=()
+          if [ -n "${CLOUDSQL_INSTANCE:-}" ]; then
+            EXTRA_FLAGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE}")
+          fi
+          if [ -n "${VPC_CONNECTOR:-}" ]; then
+            EXTRA_FLAGS+=(--vpc-connector="${VPC_CONNECTOR}" --vpc-egress=all-traffic)
+          fi
           gcloud run deploy "${NAME}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${GCP_REGION}" \
             --image="${IMAGE}" \
             --platform=managed \
             --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
-            --add-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
-            --vpc-connector="${VPC_CONNECTOR}" \
-            --vpc-egress=all-traffic \
+            "${EXTRA_FLAGS[@]}" \
             --ingress=all \
             --allow-unauthenticated \
             --env-vars-file=/tmp/run-env.json \
@@ -259,8 +262,6 @@ jobs:
           CLOUD_RUN_SERVICE_WORKER: ${{ vars.CLOUD_RUN_SERVICE_WORKER }}
         run: |
           set -euo pipefail
-          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE}"
-          : "${VPC_CONNECTOR:?Set repo variable VPC_CONNECTOR}"
           : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
           : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
           NAME="${CLOUD_RUN_SERVICE_WORKER:-beaconflame-worker}"
@@ -281,15 +282,20 @@ jobs:
                   out[k] = v
           open("/tmp/run-env.json", "w", encoding="utf-8").write(json.dumps(out))
           PY
+          EXTRA_FLAGS=()
+          if [ -n "${CLOUDSQL_INSTANCE:-}" ]; then
+            EXTRA_FLAGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE}")
+          fi
+          if [ -n "${VPC_CONNECTOR:-}" ]; then
+            EXTRA_FLAGS+=(--vpc-connector="${VPC_CONNECTOR}" --vpc-egress=all-traffic)
+          fi
           gcloud run deploy "${NAME}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${GCP_REGION}" \
             --image="${IMAGE}" \
             --platform=managed \
             --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
-            --add-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
-            --vpc-connector="${VPC_CONNECTOR}" \
-            --vpc-egress=all-traffic \
+            "${EXTRA_FLAGS[@]}" \
             --ingress=all \
             --no-allow-unauthenticated \
             --min-instances=1 \
@@ -307,7 +313,6 @@ jobs:
           CLOUD_RUN_JOB_MIGRATE: ${{ vars.CLOUD_RUN_JOB_MIGRATE }}
         run: |
           set -euo pipefail
-          : "${CLOUDSQL_INSTANCE:?Set repo variable CLOUDSQL_INSTANCE}"
           : "${RUNTIME_SERVICE_ACCOUNT:?Set repo variable RUNTIME_SERVICE_ACCOUNT}"
           : "${ALLOWED_HOSTS:?Set repo variable ALLOWED_HOSTS}"
           JOB="${CLOUD_RUN_JOB_MIGRATE:-beaconflame-migrate}"
@@ -324,6 +329,10 @@ jobs:
           }
           open("/tmp/migrate-env.json", "w", encoding="utf-8").write(json.dumps(out))
           PY
+          EXTRA_FLAGS=()
+          if [ -n "${CLOUDSQL_INSTANCE:-}" ]; then
+            EXTRA_FLAGS+=(--set-cloudsql-instances="${CLOUDSQL_INSTANCE}")
+          fi
           gcloud run jobs deploy "${JOB}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${GCP_REGION}" \
@@ -332,7 +341,7 @@ jobs:
             --max-retries=0 \
             --parallelism=1 \
             --service-account="${RUNTIME_SERVICE_ACCOUNT}" \
-            --set-cloudsql-instances="${CLOUDSQL_INSTANCE}" \
+            "${EXTRA_FLAGS[@]}" \
             --env-vars-file=/tmp/migrate-env.json \
             --set-secrets="${SEC_COMMON}" \
             --command=python \
