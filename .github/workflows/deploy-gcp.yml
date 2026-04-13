@@ -183,7 +183,10 @@ jobs:
         run: |
           set -euo pipefail
           : "${GCP_REGION:?Set Actions variable GCP_REGION (repository or Environment, e.g. us-central1). Empty region produced invalid host -docker.pkg.dev.}"
-          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          HOST="${GCP_REGION}-docker.pkg.dev"
+          gcloud auth configure-docker "${HOST}" --quiet
+          # Some runners still attempt an anonymous push unless we explicitly log in.
+          gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin "${HOST}"
 
       - name: Build and push image
         run: |
